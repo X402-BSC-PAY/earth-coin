@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$EARTH - 点亮地球 + 全球聊天 🌍💬🚀</title>
+    <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <link rel="icon" href="logo.png">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; font-family: Arial, sans-serif; overflow: hidden; }
+        #cesiumContainer { width: 100vw; height: 100vh; }
+        .panel { position: fixed; top: 20px; left: 20px; z-index: 999; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 15px; backdrop-filter: blur(10px); color: white; min-width: 300px; }
+        h1 { text-align: center; font-size: 2.2em; margin-bottom: 15px; background: linear-gradient(45deg, #00ff88, #0099ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        button, input { width: 100%; padding: 12px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; }
+        button { background: linear-gradient(45deg, #00ff88, #0099ff); cursor: pointer; font-weight: bold; transition: transform 0.3s; }
+        button:hover { transform: scale(1.05); }
+        .buy-btn { background: linear-gradient(45deg, #ff6b6b, #ffd93d) !important; }
+        .share-btn { background: linear-gradient(45deg, #1da1f2, #0d8bd9) !important; }
+        .hidden { display: none; }
+        input { background: rgba(255,255,255,0.1); color: white; }
+        #chatBox { position: fixed; bottom: 20px; right: 20px; width: 350px; height: 400px; background: rgba(0,0,0,0.8); border-radius: 15px; padding: 10px; display: flex; flex-direction: column; z-index: 999; backdrop-filter: blur(10px); }
+        #messages { flex: 1; overflow-y: auto; margin-bottom: 10px; color: white; }
+        #chatInput { width: 100%; padding: 10px; border-radius: 8px; background: rgba(255,255,255,0.1); color: white; }
+        footer { position: fixed; bottom: 20px; left: 20px; color: #aaa; font-size: 0.9em; }
+        @media (max-width: 768px) { .panel, #chatBox { left: 10px; right: 10px; min-width: auto; } #chatBox { width: auto; height: 300px; } }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    
+    <div class="panel">
+        <h1>🌍 $EARTH</h1>
+        <p style="text-align:center; margin-bottom:20px; opacity:0.9;">连接钱包，点亮+聊天+分享赚5%！</p>
+        <button onclick="connectWallet()">🔗 连接Phantom</button>
+        <div id="locPanel" class="hidden">
+            <input id="inviteCode" placeholder="输入邀请码（可选）" />
+            <button onclick="getLocation()">📍 授权位置点亮</button>
+            <button onclick="generateInviteCode()" class="hidden" id="shareBtn">📤 分享邀请码赚5%</button>
+        </div>
+        <button class="buy-btn" onclick="window.open('https://dev.fun', '_blank')">🛒 买$EARTH</button>
+    </div>
+    
+    <div id="chatBox" class="hidden">
+        <div id="messages"></div>
+        <input id="chatInput" placeholder="聊点啥（自动翻译）..." onkeypress="if(event.key==='Enter') sendMessage();" />
+    </div>
+    
+    <footer>
+        <p>公平发射 | 0%税 | DYOR/NFA | <a href="#" style="color:#00ff88;" onclick="window.open('https://dexscreener.com/solana/CA_SOON', '_blank')">DexScreener (CA更新)</a></p>
+    </footer>
+
+    <script>
+        let viewer, entities = [], socket, userPubkey, userLat, userLng, inviteCode;
+        const MINT = 'YOUR_MINT_HERE'; // 🔥 发币后替换CA
+        const siteUrl = 'YOUR_SITE_URL'; // 🔥 部署后替换Vercel URL
+        const backendUrl = 'YOUR_BACKEND_URL'; // 🔥 后端URL (Vercel)
+
+        // 初始化3D地球
+        function initMap() {
+            Cesium.Ion.defaultAccessToken = '';
+            viewer = new Cesium.Viewer('cesiumContainer', {
+                terrain: Cesium.Terrain.fromWorldTerrain(),
+                imageryProvider: new Cesium.OpenStreetMapImageryProvider({ url: '//tile.openstreetmap.org/{z}/{x}/{y}.png' }),
+                baseLayerPicker: false, timeline: false, animation: false
+            });
+            viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(0, 0, 15000000) });
+            animateEarth();
+        }
+
+        function animateEarth() {
+            let angle = 0;
+            setInterval(() => {
+                angle += 0.1;
+                viewer.scene.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(angle % 360, 0, 15000000) });
+            }, 50);
+        }
+
+        // 连接Phantom
+        async function connectWallet() {
+            if (!window.solana) return alert('安装Phantom！');
+            try {
+                await window.solana.connect();
+                userPubkey = window.solana.publicKey.toString();
+                const connection = new solanaWeb3.Connection('https://api.mainnet-beta.solana.com');
+                const accounts = await connection.getParsedTokenAccountsByOwner(
+                    new solanaWeb3.PublicKey(userPubkey),
+                    { mint: new solanaWeb3.PublicKey(MINT) }
+                );
+                if (accounts.value.length > 0 && accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount > 0) {
+                    document.getElementById('locPanel').classList.remove('hidden');
+                    document.getElementById('chatBox').classList.remove('hidden');
+                    initChat();
+                    alert(`✅ 持有 ${accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount.toFixed(2)} $EARTH！点亮+聊天`);
+                    const code = document.getElementById('inviteCode').value.trim();
+                    if (code) {
+                        localStorage.setItem('referrerCode', code);
+                        fetch(`${backendUrl}/api/invite`, { 
+                            method: 'POST', 
+                            headers: { 'Content-Type': 'application/json' }, 
+                            body: JSON.stringify({ pubkey: userPubkey, code }) 
+                        });
+                    }
+                } else alert('❌ 未持有，快去买！');
+            } catch (e) { alert('连接失败，重试'); }
+        }
+
+        // 位置点亮
+        function getLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(pos => {
+                    userLat = pos.coords.latitude;
+                    userLng = pos.coords.longitude;
+                    addMarker(userLat, userLng);
+                    document.getElementById('shareBtn').classList.remove('hidden');
+                }, () => alert('授权失败，手动试试？'));
+            } else alert('浏览器不支持定位');
+        }
+
+        function addMarker(lat, lng) {
+            const entity = viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(lng, lat, 10000),
+                point: { pixelSize: 20, color: Cesium.Color.fromCssColorString(`hsl(${Math.random()*360}, 100%, 50%)`), outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+                description: `Degen at (${lat.toFixed(2)}, ${lng.toFixed(2)})`
+            });
+            entities.push(entity);
+            viewer.flyTo(entity);
+            alert('🎉 点亮成功！分享邀请码赚5%');
+        }
+
+        // 生成邀请码
+        function generateInviteCode() {
+            inviteCode = btoa(userPubkey.slice(0, 8) + Date.now()).slice(0, 10);
+            localStorage.setItem('inviteCode', inviteCode);
+            const text = `我点亮$EARTH在(${userLat.toFixed(2)}, ${userLng.toFixed(2)})! 用我的邀请码 ${inviteCode} 加入: ${siteUrl} #EARTHLightUp`;
+            html2canvas(document.getElementById('cesiumContainer')).then(canvas => {
+                const img = canvas.toDataURL('image/png');
+                const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+                window.open(shareUrl);
+                alert('分享到X！别人用你的码买$EARTH，你得5%空投！');
+                fetch(`${backendUrl}/api/invite`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ pubkey: userPubkey, code: inviteCode }) 
+                });
+            });
+        }
+
+        // 聊天
+        function initChat() {
+            socket = io(backendUrl);
+            socket.on('message', msg => {
+                const div = document.createElement('div');
+                div.textContent = `${msg.user}: ${msg.text} (${msg.lang})`;
+                document.getElementById('messages').appendChild(div);
+                div.scrollIntoView();
+            });
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            if (!text) return;
+            const res = await fetch('https://libretranslate.com/translate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q: text, source: 'auto', target: 'en' })
+            });
+            const data = await res.json();
+            const translated = data.translatedText || text; // 后备
+            socket.emit('message', { user: userPubkey.slice(0,4), text: translated, lang: 'EN' });
+            input.value = '';
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
